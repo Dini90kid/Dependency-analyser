@@ -3,14 +3,18 @@ import zipfile
 import os
 import io
 import pandas as pd
-from utils import (
+
+import os, sys
+# Ensure the app’s folder is first on sys.path so local modules win over any PyPI packages
+sys.path.insert(0, os.path.dirname(__file__))
+
+from bw_utils import (
     scan_local_directory,
     scan_zip_structure,
     parse_dependency_logs_from_files,
     build_analysis_outputs,
     create_excel_workbook,
 )
-
 # --------------------------------------------------------------
 # STREAMLIT CONFIG
 # --------------------------------------------------------------
