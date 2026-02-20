@@ -5,16 +5,17 @@ import csv
 import pandas as pd
 
 
-# --------------------------------------------------------
-# HELPER: Parse a single dependency_log file
-# --------------------------------------------------------
+# ======================================================================
+#  PARSE A SINGLE dependencies_log FILE (semicolon-separated)
+# ======================================================================
 def parse_dependency_csv(text):
     """
-    CSV always semicolon-separated.
-    FM rows have:
+    ABAP dependency export format:
+        ranid;Container;Kind;Name;Where;Line;Note
+
+    We extract FM calls where:
         Kind = 'FM'
-        Where = 'CALL FUNCTION'
-    Name column contains FM name.
+        Where contains 'CALL FUNCTION'
     """
     fms = set()
     rows = csv.reader(text.splitlines(), delimiter=';')
@@ -34,14 +35,14 @@ def parse_dependency_csv(text):
     return list(fms)
 
 
-# --------------------------------------------------------
-# MODE 2: Parse from uploaded dependency files
-# --------------------------------------------------------
+# ======================================================================
+#  MODE 2 — MULTIPLE FILE UPLOAD (standalone dependency_log files)
+# ======================================================================
 def parse_dependency_logs_from_files(file_dict):
     """
     file_dict = {filename: text}
     UseCase = filename (without extension)
-    Provider is unknown => set to "N/A"
+    Provider = 'N/A'
     """
     results = []
 
@@ -59,16 +60,33 @@ def parse_dependency_logs_from_files(file_dict):
     return results
 
 
-# --------------------------------------------------------
-# MODE 1: ZIP FOLDER SCAN
-# --------------------------------------------------------
+# ======================================================================
+#  MODE 1 — ZIP UPLOAD (recursively scan folder structure)
+# ======================================================================
 def scan_zip_structure(zip_file):
+    """
+    ZIP structure:
+        UseCase/
+            Provider/
+                Transformations/
+                    Dependencies_Log  (any naming variations)
+
+    Robust matching: any filename containing "depend" + "log".
+    """
     results = []
 
     for member in zip_file.namelist():
-        if member.lower().endswith("dependencies_log"):
+        lower = member.lower()
+
+        # Match variations:
+        #   dependencies_log
+        #   Dependencies_Log
+        #   dependencylog
+        #   dependency_log.txt
+        if "depend" in lower and "log" in lower:
             parts = member.split("/")
 
+            # Expected: UseCase / Provider / Transformations / file
             if len(parts) < 4:
                 continue
 
@@ -87,10 +105,14 @@ def scan_zip_structure(zip_file):
     return results
 
 
-# --------------------------------------------------------
-# MODE 3: LOCAL DIRECTORY RECURSIVE SCAN
-# --------------------------------------------------------
+# ======================================================================
+#  MODE 3 — LOCAL DIRECTORY SCANNING (Desktop only)
+# ======================================================================
 def scan_local_directory(root_path):
+    """
+    Recursively scan:
+        root_path / UseCase / Provider / Transformations / dependencies_log*
+    """
     results = []
 
     for usecase in os.listdir(root_path):
@@ -107,15 +129,17 @@ def scan_local_directory(root_path):
             if not os.path.isdir(tr_path):
                 continue
 
-            # Find dependency_log
-           for f in os.listdir(tr_path):
-    fname = f.lower()
-    if (
-        "depend" in fname
-        and "log" in fname
-        and fname.endswith((".txt", ".log", ""))  # cover files with no extension too
-    ):
+            # Find dependency_log variations inside Transformations/
+            for f in os.listdir(tr_path):
+                fname = f.lower()
+
+                if (
+                    "depend" in fname
+                    and "log" in fname
+                    and (fname.endswith(".txt") or fname.endswith(".log") or "." not in fname)
+                ):
                     fpath = os.path.join(tr_path, f)
+
                     text = open(fpath, "r", encoding="utf-8", errors="ignore").read()
                     fms = parse_dependency_csv(text)
 
@@ -128,10 +152,17 @@ def scan_local_directory(root_path):
     return results
 
 
-# --------------------------------------------------------
-# BUILD ANALYSIS TABLES
-# --------------------------------------------------------
+# ======================================================================
+#  BUILD ANALYSIS TABLES
+# ======================================================================
 def build_analysis_outputs(records):
+    """
+    Build:
+        - UseCase → Provider → FM List
+        - FM → UseCase list
+        - Unique FMs
+        - Summary table
+    """
     rows = []
     fm_map = {}
 
@@ -146,14 +177,17 @@ def build_analysis_outputs(records):
             "fm_list": ", ".join(fms)
         })
 
+        # Reverse mapping: FM → UseCases
         for fm in fms:
             fm_map.setdefault(fm, set()).add(usecase)
 
     df_usecase_provider = pd.DataFrame(rows)
+
     df_fm_usecase = pd.DataFrame([
         {"fm": fm, "usecases": ", ".join(sorted(ucs))}
         for fm, ucs in fm_map.items()
     ])
+
     df_unique_fms = pd.DataFrame(sorted(fm_map.keys()), columns=["fm"])
 
     summary = {
@@ -170,10 +204,17 @@ def build_analysis_outputs(records):
     return df_usecase_provider, df_fm_usecase, df_unique_fms, summary_df
 
 
-# --------------------------------------------------------
-# CREATE EXCEL + ZIP
-# --------------------------------------------------------
+# ======================================================================
+#  CREATE EXCEL + ZIP EXPORT PACKAGE
+# ======================================================================
 def create_excel_workbook(df1, df2, df3, df4):
+    """
+    Creates:
+        analysis.xlsx (4 sheets)
+        ZIP containing:
+            - all CSVs
+            - analysis.xlsx
+    """
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         df1.to_excel(writer, sheet_name="usecase_provider_fm", index=False)
@@ -181,7 +222,7 @@ def create_excel_workbook(df1, df2, df3, df4):
         df3.to_excel(writer, sheet_name="unique_fms", index=False)
         df4.to_excel(writer, sheet_name="summary", index=False)
 
-    # Make ZIP package
+    # Build ZIP package
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as z:
         z.writestr("usecase_provider_fm.csv", df1.to_csv(index=False))
