@@ -108,8 +108,13 @@ def scan_local_directory(root_path):
                 continue
 
             # Find dependency_log
-            for f in os.listdir(tr_path):
-                if f.lower().startswith("dependencies_log"):
+           for f in os.listdir(tr_path):
+    fname = f.lower()
+    if (
+        "depend" in fname
+        and "log" in fname
+        and fname.endswith((".txt", ".log", ""))  # cover files with no extension too
+    ):
                     fpath = os.path.join(tr_path, f)
                     text = open(fpath, "r", encoding="utf-8", errors="ignore").read()
                     fms = parse_dependency_csv(text)
